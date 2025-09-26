@@ -1,6 +1,10 @@
 // index.js (atualizado para tickers da corretora e VIX-OCT25)
 const dotenv = require('dotenv');
-const envFile = process.env.NODE_ENV === 'production' ? '.env.production' : '.env.local';
+
+// --------------------------
+// Ajuste para suportar DOTENV_CONFIG_PATH
+// --------------------------
+const envFile = process.env.DOTENV_CONFIG_PATH || '.env.local';
 dotenv.config({ path: envFile });
 
 const express = require('express');
@@ -68,8 +72,6 @@ app.get('/test-signal', (req, res) => {
 
 // ==============================
 // Endpoint para ticks reais do EA
-// - aceita um único tick (objeto) ou um array de ticks
-// - formato esperado: { symbol, price, change, timestamp? }
 // ==============================
 app.post('/ea-tick', (req, res) => {
   const ticks = Array.isArray(req.body) ? req.body : [req.body];
@@ -130,7 +132,6 @@ let lastScalpDate = null;
 // ==============================
 function generateRandomCandle(symbol) {
   const prev = candlesBySymbol[symbol].slice(-1)[0] || null;
-  // Ajuste das bases: GOLD substitui XAUUSD, OILCash para petróleo
   const base = prev ? prev.close : (symbol === 'GOLD' ? 1950 : 1.0);
   const volatility = symbol === 'GOLD' ? 1.5 : (symbol === 'OILCash' ? 0.8 : 0.005);
   const open = +(base + (Math.random()-0.5)*volatility).toFixed(3);
@@ -193,7 +194,6 @@ function tickSimulation() {
     arr.push(candle);
     if(arr.length>MAX_CANDLES) arr.shift();
 
-    // Emit ticker e candle no mesmo formato que o EA envia
     io.emit('candle', candle);
     io.emit('ticker', { symbol, price: candle.close, change: +(candle.close-candle.open).toFixed(3), timestamp: candle.time });
     io.emit('volatility', { symbol, level: calculateVolatility(symbol) });
@@ -210,7 +210,6 @@ function tickSimulation() {
       let signals = strategies.checkAll(symbol, arr, 10000, context);
       signals = Array.isArray(signals) ? signals.filter(Boolean) : signals ? [signals] : [];
 
-      // ajuste: scalpDailyCount para GOLD (era XAUUSD)
       if(symbol === 'GOLD'){
         signals = signals.map(s => { 
           if(s.strategy==='scalp_gold' && scalpDailyCount<3){ scalpDailyCount++; return s; } 
