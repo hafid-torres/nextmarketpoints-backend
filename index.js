@@ -10,10 +10,22 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const strategies = require('./strategies');
-const cors = require('cors');
 const newsModule = require('./news');
 const helmet = require('helmet');
+const cors = require('cors');
 const fs = require('fs');
+
+// ==============================
+// Função calculateVolatility
+// ==============================
+const calculateVolatility = symbol => {
+  const candles = candlesBySymbol[symbol] || [];
+  if (candles.length < 2) return 0;
+  const closes = candles.map(c => c.close);
+  const mean = closes.reduce((a, b) => a + b, 0) / closes.length;
+  const variance = closes.reduce((a, c) => a + Math.pow(c - mean, 2), 0) / closes.length;
+  return Math.sqrt(variance);
+};
 
 // ==============================
 // Configuração do Express + CORS
@@ -157,12 +169,6 @@ const candlesBySymbol = {};
 SYMBOLS.forEach(s => candlesBySymbol[s] = []);
 
 // ==============================
-// Restante do código (tickSimulation, sinais, etc.)
-// ==============================
-// Mantido exatamente como você já tinha, nada foi alterado aqui.
-// ==============================
-
-// ==============================
 // Socket.IO – conexão
 // ==============================
 io.on('connection', socket => {
@@ -173,11 +179,6 @@ io.on('connection', socket => {
   socket.emit('news', newsModule.getLatest());
   socket.on('disconnect', () => console.log(`❌ Cliente desconectado: ${socket.id}`));
 });
-
-// ==============================
-// Intervalos, simulações, newsModule, erros globais
-// ==============================
-// Mantidos como antes
 
 // ==============================
 // Start Server
