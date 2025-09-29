@@ -159,6 +159,16 @@ function checkAll(symbol, candles, balance = DEFAULT_BALANCE, context = {}) {
 }
 
 // -----------------------------
+// Função de volatilidade (novo)
+function calculateVolatility(candles, period = 14) {
+  if (!candles || candles.length < 2) return 0;
+  const closes = candles.slice(-period).map(c => c.close);
+  const max = Math.max(...closes);
+  const min = Math.min(...closes);
+  return max - min;
+}
+
+// -----------------------------
 // Helpers
 function makeSignal(side, strategy, weight, reasons, now, symbol) { return { side, strategy, weight, reasons, time: now.toISOString(), symbol }; }
 function SMA(candles, period) { if(candles.length<period) return null; return candles.slice(-period).reduce((a,c)=>a+c.close,0)/period; }
@@ -211,4 +221,8 @@ function applyConfidenceModifiers(signal, newsPenalty, higherTrend, marketStreng
 
 // -----------------------------
 // Export
-module.exports = { checkAll, __internals: { WEIGHTS, SIGNAL_EXPIRE_SEC, ASSET_COOLDOWN_SEC, SCALP_GOLD_COOLDOWN_SEC } };
+module.exports = { 
+  checkAll, 
+  calculateVolatility, // ADICIONADA
+  __internals: { WEIGHTS, SIGNAL_EXPIRE_SEC, ASSET_COOLDOWN_SEC, SCALP_GOLD_COOLDOWN_SEC } 
+};
