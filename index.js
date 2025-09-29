@@ -16,6 +16,21 @@ const cors = require('cors');
 const fs = require('fs');
 
 // ==============================
+// Lista de símbolos, candles e constantes
+// ==============================
+const SYMBOLS = [
+  'GOLD','SILVER','EURUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','NZDUSD','USDCHF','EURJPY',
+  'BTCUSD','ETHUSD','LTCUSD','XRPUSD','BCHUSD',
+  'US500Cash','US30Cash','US100Cash','US2000Cash','UK100Cash','GER40Cash','JP225Cash','NIKKEI','HK50Cash','ChinaHCash',
+  'Apple','Microsoft','Amazon','Google','Tesla','Facebook','Nvidia','Netlix','JPMorgan',
+  'OILCash','NGASCash','XPTUSD','XPDUSD',
+  'VIX-OCT25'
+];
+const MAX_CANDLES = 500;
+const candlesBySymbol = {};
+SYMBOLS.forEach(s => candlesBySymbol[s] = []);
+
+// ==============================
 // Função calculateVolatility
 // ==============================
 const calculateVolatility = symbol => {
@@ -41,17 +56,26 @@ app.use(helmet());
 app.use(cors({ origin: allowedOrigins, methods: ["GET", "POST"] }));
 
 // ==============================
-// Middleware de JSON
+// Middleware JSON – apenas express.json() com verificação
 // ==============================
-app.use(express.json());
+app.use(express.json({
+  strict: true,
+  verify: (req, res, buf) => {
+    try {
+      JSON.parse(buf.toString());
+    } catch (e) {
+      throw new Error('JSON inválido');
+    }
+  }
+}));
 
-// Middleware para logar JSON inválido
+// Middleware global para capturar JSON inválido
 app.use((err, req, res, next) => {
-  if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
-    console.error('JSON inválido recebido (erro de parse):', req.body);
+  if (err.message === 'JSON inválido') {
+    console.error('⚠️ JSON inválido recebido:', req.body);
     return res.status(400).json({ error: 'JSON inválido' });
   }
-  next();
+  next(err);
 });
 
 const server = http.createServer(app);
@@ -67,7 +91,6 @@ const io = new Server(server, {
 // Configuração do servidor
 // ==============================
 const PORT = process.env.PORT || 3000;
-
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'nextmarketpoints-backend' }));
 
 // ==============================
@@ -143,21 +166,6 @@ app.post('/ea-tick', (req, res) => {
 
   res.json({ status: 'ok', processed: processedTicks.length, symbols: processedTicks });
 });
-
-// ==============================
-// Lista de símbolos, candles e constantes
-// ==============================
-const SYMBOLS = [
-  'GOLD','SILVER','EURUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','NZDUSD','USDCHF','EURJPY',
-  'BTCUSD','ETHUSD','LTCUSD','XRPUSD','BCHUSD',
-  'US500Cash','US30Cash','US100Cash','US2000Cash','UK100Cash','GER40Cash','JP225Cash','NIKKEI','HK50Cash','ChinaHCash',
-  'Apple','Microsoft','Amazon','Google','Tesla','Facebook','Nvidia','Netlix','JPMorgan',
-  'OILCash','NGASCash','XPTUSD','XPDUSD',
-  'VIX-OCT25'
-];
-const MAX_CANDLES = 500;
-const candlesBySymbol = {};
-SYMBOLS.forEach(s => candlesBySymbol[s] = []);
 
 // ==============================
 // Socket.IO – conexão
