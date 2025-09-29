@@ -41,27 +41,18 @@ app.use(helmet());
 app.use(cors({ origin: allowedOrigins, methods: ["GET", "POST"] }));
 
 // ==============================
-// Middleware para capturar JSON inválido
+// Middleware para capturar JSON inválido de forma segura
 // ==============================
-app.use((req, res, next) => {
-  if (req.is('application/json')) {
-    let rawData = '';
-    req.on('data', chunk => rawData += chunk);
-    req.on('end', () => {
-      try {
-        if (rawData) req.body = JSON.parse(rawData);
-      } catch (err) {
-        console.error('JSON inválido recebido:', rawData);
-        return res.status(400).json({ error: 'JSON inválido' });
-      }
-      next();
-    });
-  } else {
-    next();
+app.use(express.json({
+  verify: (req, res, buf) => {
+    try {
+      if (buf && buf.length) JSON.parse(buf);
+    } catch (err) {
+      console.error('JSON inválido recebido (erro de parse):', buf.toString());
+      throw new Error('JSON inválido');
+    }
   }
-});
-
-app.use(express.json());
+}));
 
 const server = http.createServer(app);
 
