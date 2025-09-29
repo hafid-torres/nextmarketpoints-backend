@@ -72,7 +72,7 @@ app.use(express.json({
 // Middleware global para capturar JSON inválido
 app.use((err, req, res, next) => {
   if (err.message === 'JSON inválido') {
-    console.error('⚠️ JSON inválido recebido:', req.body);
+    console.error('⚠️ JSON inválido recebido (raw):', req.body);
     return res.status(400).json({ error: 'JSON inválido' });
   }
   next(err);
@@ -127,12 +127,20 @@ app.get('/test-signal', (req, res) => {
 });
 
 // ==============================
-// Endpoint para ticks reais do EA
+// Endpoint para ticks reais do EA (com logging completo)
 // ==============================
 app.post('/ea-tick', (req, res) => {
+  console.log("=== Recebido POST /ea-tick ===");
+  console.log("Headers:", req.headers);
+  console.log("Body (raw):", req.body);
+
+  if (!req.body || (Array.isArray(req.body) && req.body.length === 0)) {
+    console.warn("⚠️ JSON inválido recebido (vazio ou undefined)");
+    return res.status(400).json({ error: 'JSON inválido' });
+  }
+
   const ticks = Array.isArray(req.body) ? req.body : [req.body];
   const processedTicks = [];
-  console.log('🟢 /ea-tick recebido:', ticks);
 
   ticks.forEach(tick => {
     const { symbol, price, change, timestamp } = tick;
@@ -164,6 +172,7 @@ app.post('/ea-tick', (req, res) => {
     return res.status(400).json({ error: 'Nenhum tick válido recebido' });
   }
 
+  console.log("🟢 /ea-tick válido:", processedTicks);
   res.json({ status: 'ok', processed: processedTicks.length, symbols: processedTicks });
 });
 
