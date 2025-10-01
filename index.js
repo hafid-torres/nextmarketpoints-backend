@@ -3,7 +3,7 @@ const dotenv = require('dotenv');
 // --------------------------
 // Ajuste para suportar DOTENV_CONFIG_PATH
 // --------------------------
-const envFile = process.env.DOTENV_CONFIG_PATH || '.env.local';
+const envFile = process.env.DOTENV_CONFIG_PATH || '.env.production';
 dotenv.config({ path: envFile });
 
 const express = require('express');
@@ -53,7 +53,7 @@ const allowedOrigins = [
 
 const app = express();
 app.use(helmet());
-app.use(cors({ origin: allowedOrigins, methods: ["GET", "POST"] }));
+app.use(cors({ origin: allowedOrigins, methods: ["GET", "POST"], credentials: true }));
 
 // ==============================
 // Middleware JSON – apenas express.json() com verificação
@@ -86,9 +86,10 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
-    methods: ["GET", "POST"]
+    methods: ["GET", "POST"],
+    credentials: true
   },
-  transports: ["websocket", "polling"], // 👈 garante que websocket vai ser oferecido
+  transports: ["websocket", "polling"],
 });
 
 // ==============================
@@ -131,7 +132,7 @@ app.get('/test-signal', (req, res) => {
 });
 
 // ==============================
-// Endpoint para ticks reais do EA (com logging completo)
+// Endpoint para ticks reais do EA
 // ==============================
 app.post('/ea-tick', (req, res) => {
   console.log("=== Recebido POST /ea-tick ===");
@@ -147,12 +148,20 @@ app.post('/ea-tick', (req, res) => {
   const processedTicks = [];
 
   ticks.forEach(tick => {
-    const { symbol, price, change, timestamp } = tick;
-    if (!symbol || price === undefined || change === undefined) return;
+    const { symbol, price } = tick;
+    let { change, timestamp } = tick;
+
+    if (!symbol || price === undefined) {
+      console.warn('⚠️ Tick inválido, falta symbol ou price:', tick);
+      return;
+    }
+
+    change = change || 0;
+    timestamp = timestamp || Date.now();
 
     const candle = {
       symbol,
-      time: timestamp || Date.now(),
+      time: timestamp,
       open: price - change,
       high: price + Math.abs(change),
       low: price - Math.abs(change),
@@ -184,7 +193,7 @@ app.post('/ea-tick', (req, res) => {
 // Socket.IO – conexão
 // ==============================
 io.on('connection', socket => {
-  console.log(`📡 Cliente conectado: ${socket.id}`);
+  console.log(`📡 Cliente conectado: ${socket.id} | Total clientes: ${io.engine.clientsCount}`);
   const payload = {};
   SYMBOLS.forEach(s => payload[s] = candlesBySymbol[s].slice(-200));
   socket.emit('init', { candles: payload, symbols: SYMBOLS });
