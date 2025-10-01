@@ -84,7 +84,11 @@ const server = http.createServer(app);
 // Socket.IO com CORS unificado
 // ==============================
 const io = new Server(server, {
-  cors: { origin: allowedOrigins, methods: ["GET", "POST"] }
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"]
+  },
+  transports: ["websocket", "polling"], // 👈 garante que websocket vai ser oferecido
 });
 
 // ==============================
