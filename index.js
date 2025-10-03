@@ -49,7 +49,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok', service: 'nextmarketpo
 // ==============================
 app.get('/news', (req, res) => {
   try { 
-    const news = newsModule.getLatest();
+    const news = newsModule.getLatest() || [];
     console.log('📰 /news retornando notícias:', news.length);
     res.json(news); 
   } catch (err) { 
@@ -83,7 +83,7 @@ app.get('/test-signal', (req, res) => {
 app.post('/ea-tick', (req, res) => {
   const ticks = Array.isArray(req.body) ? req.body : [req.body];
   const processedTicks = [];
-  console.log('🟢 /ea-tick recebido:', ticks);
+  console.log('🟢 /ea-tick recebido:', ticks.length);
 
   ticks.forEach(tick => {
     const { symbol, price, change, timestamp } = tick;
@@ -125,7 +125,7 @@ app.post('/ea-tick', (req, res) => {
 });
 
 // ==============================
-// Top ativos (ajustados para ticker da corretora)
+// Top ativos
 // ==============================
 const SYMBOLS = [
   'GOLD','SILVER','EURUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','NZDUSD','USDCHF','EURJPY',
@@ -138,7 +138,7 @@ const SYMBOLS = [
 const MAX_CANDLES = 500;
 
 // ==============================
-// Preços base reais dos ativos
+// Preços base reais
 // ==============================
 const BASE_PRICES = {
   GOLD: 3773.00,
@@ -181,7 +181,9 @@ const BASE_PRICES = {
   "VIX-OCT25": 17.42
 };
 
+// ==============================
 // Inicializa candles
+// ==============================
 const candlesBySymbol = {};
 SYMBOLS.forEach(s => {
   const price = BASE_PRICES[s] || 1.0;
@@ -242,90 +244,34 @@ function calculateVolatility(symbol) {
   return +((Math.max(...highs)-Math.min(...lows))/Math.min(...lows)*100).toFixed(2);
 }
 
-function saveCandlesToFile() {
-  try { 
-    fs.writeFileSync('candles.json', JSON.stringify(candlesBySymbol)); 
-    console.log('💾 Candles salvos no arquivo candles.json');
-  } catch(e) { 
-    console.error('Erro ao salvar candles:', e); 
+function saveCandles() {
+  try {
+    fs.writeFileSync('./candles.json', JSON.stringify(candlesBySymbol,null,2));
+    console.log('💾 Candles salvos em candles.json');
+  } catch(e) {
+    console.error('Erro ao salvar candles:', e);
   }
 }
-setInterval(saveCandlesToFile, 5*60*1000);
 
 // ==============================
-// Emissão de sinais
-// ==============================
-const SIGNAL_EXPIRATION_MS = 5 * 60 * 1000;
-function emitSignalWithPriority(signals) {
-  if (!signals || signals.length === 0) return null;
-  const now = Date.now();
-  const validSignals = signals.filter(s => s && (!s.timestamp || (now - s.timestamp) < SIGNAL_EXPIRATION_MS));
-  if (validSignals.length === 0) return null;
-  const topSignal = validSignals.sort((a,b) => (b.confidence||0) - (a.confidence||0))[0];
-  topSignal.timestamp = now;
-  return topSignal;
-}
-
-function getMarketSession(symbol){
-  const hour = new Date().getUTCHours();
-  if(hour>=13 && hour<22) return 'US';
-  if(hour>=23 || hour<6) return 'Asia';
-  return 'EU';
-}
-
-let globalFearIndex = 20;
-
-// ==============================
-// Simulação de Ticks
+// Emissão contínua de candles/tickers
 // ==============================
 function tickSimulation() {
-  const today = new Date().toISOString().slice(0,10);
-  if(lastScalpDate !== today){ scalpDailyCount = 0; lastScalpDate = today; }
-
-  const scoreThreshold = parseInt(process.env.SCORE_THRESHOLD || 50, 10);
-
   SYMBOLS.forEach(symbol => {
-    const candle = candlesBySymbol[symbol].slice(-1)[0] || generateRandomCandle(symbol);
-    const arr = candlesBySymbol[symbol];
-    arr.push(candle);
-    if(arr.length>MAX_CANDLES) arr.shift();
+    const candle = generateRandomCandle(symbol);
+    candlesBySymbol[symbol].push(candle);
+    if(candlesBySymbol[symbol].length>MAX_CANDLES) candlesBySymbol[symbol].shift();
 
-    console.log(`📊 tickSimulation Emitindo candle: ${symbol} - O:${candle.open} C:${candle.close}`);
     io.emit('candle', candle);
-
-    console.log(`📈 tickSimulation Emitindo ticker: ${symbol} - ${candle.close}`);
     io.emit('ticker', { symbol, price: candle.close, change: +(candle.close-candle.open).toFixed(3), timestamp: candle.time });
-
-    console.log(`⚡ tickSimulation Emitindo volatilidade: ${symbol} - ${calculateVolatility(symbol)}`);
     io.emit('volatility', { symbol, level: calculateVolatility(symbol) });
 
     try {
-      const context = { 
-        timeframe:'5m', 
-        higher:{daily:candlesBySymbol[symbol].slice(-200)}, 
-        news:newsModule.getLatest(), 
-        session:getMarketSession(symbol), 
-        fearIndex:globalFearIndex 
-      };
-
-      let signals = strategies.checkAll(symbol, arr, 10000, context);
-      signals = Array.isArray(signals) ? signals.filter(Boolean) : signals ? [signals] : [];
-
-      if(symbol === 'GOLD'){
-        signals = signals.map(s => { 
-          if(s.strategy==='scalp_gold' && scalpDailyCount<3){ scalpDailyCount++; return s; } 
-          return s; 
-        }).filter(Boolean);
-      }
-
-      const filteredSignals = signals.filter(s => s.confidence >= scoreThreshold);
-      const topSignal = emitSignalWithPriority(filteredSignals);
-      if(topSignal){
-        console.log('⚡ tickSimulation Emitindo sinal:', topSignal);
-        io.emit('signal', topSignal);
-      }
-
-    } catch(err){ console.error('Erro strategies:', err); }
+      const signal = strategies.checkAll(symbol, candlesBySymbol[symbol], undefined, { news: newsModule.getLatest() }) || null;
+      if(signal) io.emit('signal', signal);
+    } catch(err) {
+      console.error(`❌ Erro ao gerar sinal para ${symbol}:`, err.message);
+    }
   });
 }
 
@@ -333,33 +279,38 @@ function tickSimulation() {
 // Socket.IO
 // ==============================
 io.on('connection', socket => {
-  console.log(`📡 Cliente conectado: ${socket.id}`);
-  const payload = {};
-  SYMBOLS.forEach(s => payload[s] = candlesBySymbol[s].slice(-200));
-  socket.emit('init',{ candles: payload, symbols: SYMBOLS });
-  socket.emit('news', newsModule.getLatest());
-  socket.on('disconnect', ()=> console.log(`❌ Cliente desconectado: ${socket.id}`));
+  console.log('🔌 Cliente conectado:', socket.id);
+
+  // Enviar candles iniciais
+  SYMBOLS.forEach(symbol => {
+    const latestCandle = candlesBySymbol[symbol].slice(-1)[0];
+    if(latestCandle) socket.emit('candle', latestCandle);
+  });
+
+  // Enviar últimas notícias
+  const news = newsModule.getLatest() || [];
+  socket.emit('news', news);
+
+  socket.on('disconnect', () => console.log('❌ Cliente desconectado:', socket.id));
+});
+
+// ==============================
+// Inicialização do módulo de news
+// ==============================
+newsModule.start(news => {
+  if(Array.isArray(news) && news.length>0){
+    io.emit('news', news);
+    console.log(`📰 Notícias atualizadas (${news.length})`);
+  }
 });
 
 // ==============================
 // Intervalos
 // ==============================
-setInterval(tickSimulation, 1500);
-newsModule.start(news => {
-  console.log('📰 Emitindo notícias via tickSimulation:', news.length);
-  io.emit('news', news);
-});
+setInterval(tickSimulation, 5000); // Atualiza candles e sinais a cada 5s
+setInterval(saveCandles, 5*60*1000); // Salva candles a cada 5 min
 
 // ==============================
-// Global error handling
+// Start server
 // ==============================
-process.on('uncaughtException', err => console.error('❌ Uncaught Exception:', err));
-process.on('unhandledRejection', err => console.error('❌ Unhandled Rejection:', err));
-
-// ==============================
-// Start Server
-// ==============================
-server.listen(PORT, ()=> {
-  console.log(`🚀 Backend rodando na porta ${PORT}`);
-  console.log(`👉 Backend disponível em ${process.env.BACKEND_URL}`);
-});
+server.listen(PORT, () => console.log(`🚀 Backend rodando em http://localhost:${PORT}`));

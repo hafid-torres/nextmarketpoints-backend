@@ -1,6 +1,6 @@
 // --------------------------------------
 // 📰 SISTEMA DE COLETA DE NOTÍCIAS
-// Combina NewsAPI + fontes RSS externas
+// Combina NewsAPI + fontes RSS externas com cache e deduplicação
 // --------------------------------------
 
 const axios = require("axios");
@@ -9,6 +9,7 @@ require("dotenv").config();
 
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY;
 let latestNews = [];
+const CACHE = {}; // cache por fonte para reduzir requisições desnecessárias
 
 // --------------------------------------
 // 🔹 FONTES RSS
@@ -34,8 +35,6 @@ const SYMBOL_MAP = {
   JP225Cash: /(Nikkei|CAC|JP225)/i,
   HK50Cash: /(Hang Seng|HSI|HK50)/i,
   ChinaHCash: /(Shanghai|ChinaH)/i,
-
-  // Stocks
   Apple: /(AAPL|Apple)/i,
   MICROSOFT: /(MSFT|Microsoft)/i,
   AMAZON: /(AMZN|Amazon)/i,
@@ -45,14 +44,10 @@ const SYMBOL_MAP = {
   Nvidia: /(NVDA|Nvidia)/i,
   NETFLIX: /(NFLX|Netflix)/i,
   JPMorgan: /(JPM|JPMorgan|JP Morgan)/i,
-
-  // Commodities & Índices extras
   OILCash: /(Oil|Crude|WTI|Brent)/i,
   NGASCash: /(Gas|NGAS|Natural Gas)/i,
   XPTUSD: /(Platinum|XPTUSD)/i,
   XPDUSD: /(Palladium|XPDUSD)/i,
-
-  // Volatilidade
   "VIX-OCT25": /(VIX)/i,
 };
 
@@ -73,6 +68,10 @@ function detectSymbols(text) {
 async function fetchNewsAPI() {
   if (!NEWSAPI_KEY) return [];
 
+  if (CACHE.NewsAPI && Date.now() - CACHE.NewsAPI.time < 60000) {
+    return CACHE.NewsAPI.data;
+  }
+
   try {
     const res = await axios.get("https://newsapi.org/v2/everything", {
       params: {
@@ -84,7 +83,9 @@ async function fetchNewsAPI() {
       },
     });
 
-    return res.data.articles || [];
+    const articles = res.data.articles || [];
+    CACHE.NewsAPI = { time: Date.now(), data: articles };
+    return articles;
   } catch (e) {
     console.error("❌ NewsAPI indisponível:", e.message);
     return [];
@@ -95,31 +96,30 @@ async function fetchNewsAPI() {
 // 🔹 BUSCA EM UMA FONTE RSS
 // --------------------------------------
 async function fetchRSS(source) {
+  if (CACHE[source.name] && Date.now() - CACHE[source.name].time < 60000) {
+    return CACHE[source.name].data;
+  }
+
   try {
     const r = await axios.get(source.url);
     const parsed = await xml2js.parseStringPromise(r.data, { mergeAttrs: true });
-
     const items = parsed.rss?.channel?.[0]?.item || [];
 
-    return items.map(it => {
+    const result = items.map(it => {
       const title = it.title?.[0] || "Untitled";
-
       return {
         title,
         url: it.link?.[0] || "#",
         source: source.name,
-        publishedAt: it.pubDate
-          ? new Date(it.pubDate[0]).toISOString()
-          : new Date().toISOString(),
-        timestamp: it.pubDate
-          ? new Date(it.pubDate[0]).getTime()
-          : Date.now(),
-        impact: /(FED|CPI|inflation|interest rate)/i.test(title)
-          ? "high"
-          : "low",
+        publishedAt: it.pubDate ? new Date(it.pubDate[0]).toISOString() : new Date().toISOString(),
+        timestamp: it.pubDate ? new Date(it.pubDate[0]).getTime() : Date.now(),
+        impact: /(FED|CPI|inflation|interest rate|ECB|BOE|GDP)/i.test(title) ? "high" : "low",
         symbols: detectSymbols(title),
       };
     });
+
+    CACHE[source.name] = { time: Date.now(), data: result };
+    return result;
   } catch (e) {
     console.warn(`⚠️ RSS indisponível (${source.name}):`, e.message);
     return [];
@@ -131,7 +131,6 @@ async function fetchRSS(source) {
 // --------------------------------------
 async function doFetch() {
   try {
-    // 1) Busca NewsAPI
     const newsapiArticles = await fetchNewsAPI();
     const formattedNewsAPI = newsapiArticles.map(a => {
       const title = a.title || "Untitled";
@@ -139,32 +138,28 @@ async function doFetch() {
         title,
         url: a.url || "#",
         source: a.source?.name || "NewsAPI",
-        publishedAt: a.publishedAt
-          ? new Date(a.publishedAt).toISOString()
-          : new Date().toISOString(),
-        timestamp: a.publishedAt
-          ? new Date(a.publishedAt).getTime()
-          : Date.now(),
-        impact: /(FED|CPI|inflation|interest rate)/i.test(title)
-          ? "high"
-          : "low",
+        publishedAt: a.publishedAt ? new Date(a.publishedAt).toISOString() : new Date().toISOString(),
+        timestamp: a.publishedAt ? new Date(a.publishedAt).getTime() : Date.now(),
+        impact: /(FED|CPI|inflation|interest rate|ECB|BOE|GDP)/i.test(title) ? "high" : "low",
         symbols: detectSymbols(title),
       };
     });
 
-    // 2) Busca RSS
-    const rssResults = await Promise.all(
-      RSS_SOURCES.map(src => fetchRSS(src).catch(() => []))
-    );
+    const rssResults = await Promise.all(RSS_SOURCES.map(src => fetchRSS(src).catch(() => [])));
     const allRSS = rssResults.flat();
 
-    // 3) Combina e ordena
-    const combined = [...formattedNewsAPI, ...allRSS];
+    // Combina e deduplica por title+source
+    const combinedMap = new Map();
+    [...formattedNewsAPI, ...allRSS].forEach(n => {
+      const key = `${n.title}-${n.source}`;
+      if (!combinedMap.has(key)) combinedMap.set(key, n);
+    });
+
+    const combined = Array.from(combinedMap.values());
     combined.sort((a, b) => b.timestamp - a.timestamp);
 
-    // 4) Mantém só os 20 mais recentes
+    // Mantém só os 20 mais recentes
     latestNews = combined.slice(0, 20);
-
     return latestNews;
   } catch (e) {
     console.error("❌ Erro combinando notícias:", e);
@@ -177,10 +172,8 @@ async function doFetch() {
 // --------------------------------------
 module.exports = {
   start: onUpdate => {
-    // Primeira atualização imediata
     doFetch().then(n => onUpdate(n));
 
-    // Atualiza a cada 60s
     setInterval(async () => {
       try {
         const n = await doFetch();

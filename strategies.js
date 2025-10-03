@@ -328,9 +328,7 @@ function computeMarketStrength(candles){
   return (upVol-downVol)/(upVol+downVol||1); // -1 a 1
 }
 
-function computeCorrelationFactor(symbol, correlated={}){
-  return correlated[symbol] || 0;
-}
+function computeCorrelationFactor(symbol, correlated={}){ return correlated[symbol] || 0; }
 
 function applyConfidenceModifiers(signal, newsPenalty, higherTrend, marketStrength, correlationFactor, vix){
   let conf = Math.round(Math.max(50, Math.min(100, (signal.weight / MAX_WEIGHT_POSSIBLE) * 100 * (1 - newsPenalty))));
