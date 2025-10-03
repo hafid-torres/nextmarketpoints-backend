@@ -1,3 +1,8 @@
+// --------------------------------------
+// 📰 SISTEMA DE COLETA DE NOTÍCIAS
+// Combina NewsAPI + fontes RSS externas
+// --------------------------------------
+
 const axios = require("axios");
 const xml2js = require("xml2js");
 require("dotenv").config();
@@ -5,18 +10,18 @@ require("dotenv").config();
 const NEWSAPI_KEY = process.env.NEWSAPI_KEY;
 let latestNews = [];
 
-// -----------------------------
+// --------------------------------------
 // 🔹 FONTES RSS
-// -----------------------------
+// --------------------------------------
 const RSS_SOURCES = [
   { name: "Investing", url: "https://www.investing.com/rss/news.rss" },
   { name: "Reuters", url: "https://feeds.reuters.com/reuters/businessNews" },
   { name: "FXStreet", url: "https://www.fxstreet.com/rss/news" },
 ];
 
-// -----------------------------
+// --------------------------------------
 // 🔹 MAPA DE SÍMBOLOS
-// -----------------------------
+// --------------------------------------
 const SYMBOL_MAP = {
   GOLD: /(XAUUSD|gold)/i,
   SILVER: /(XAGUSD|silver)/i,
@@ -29,6 +34,8 @@ const SYMBOL_MAP = {
   JP225Cash: /(Nikkei|CAC|JP225)/i,
   HK50Cash: /(Hang Seng|HSI|HK50)/i,
   ChinaHCash: /(Shanghai|ChinaH)/i,
+
+  // Stocks
   Apple: /(AAPL|Apple)/i,
   MICROSOFT: /(MSFT|Microsoft)/i,
   AMAZON: /(AMZN|Amazon)/i,
@@ -38,16 +45,20 @@ const SYMBOL_MAP = {
   Nvidia: /(NVDA|Nvidia)/i,
   NETFLIX: /(NFLX|Netflix)/i,
   JPMorgan: /(JPM|JPMorgan|JP Morgan)/i,
+
+  // Commodities & Índices extras
   OILCash: /(Oil|Crude|WTI|Brent)/i,
   NGASCash: /(Gas|NGAS|Natural Gas)/i,
   XPTUSD: /(Platinum|XPTUSD)/i,
   XPDUSD: /(Palladium|XPDUSD)/i,
+
+  // Volatilidade
   "VIX-OCT25": /(VIX)/i,
 };
 
-// -----------------------------
-// 🔹 FUNÇÃO PARA DETECTAR SÍMBOLOS
-// -----------------------------
+// --------------------------------------
+// 🔹 DETECTA SÍMBOLOS DENTRO DE UM TEXTO
+// --------------------------------------
 function detectSymbols(text) {
   const found = [];
   for (const [symbol, regex] of Object.entries(SYMBOL_MAP)) {
@@ -56,11 +67,12 @@ function detectSymbols(text) {
   return found;
 }
 
-// -----------------------------
-// 🔹 BUSCA NEWSAPI
-// -----------------------------
+// --------------------------------------
+// 🔹 BUSCA NA NEWSAPI
+// --------------------------------------
 async function fetchNewsAPI() {
   if (!NEWSAPI_KEY) return [];
+
   try {
     const res = await axios.get("https://newsapi.org/v2/everything", {
       params: {
@@ -71,6 +83,7 @@ async function fetchNewsAPI() {
         apiKey: NEWSAPI_KEY,
       },
     });
+
     return res.data.articles || [];
   } catch (e) {
     console.error("❌ NewsAPI indisponível:", e.message);
@@ -78,23 +91,32 @@ async function fetchNewsAPI() {
   }
 }
 
-// -----------------------------
-// 🔹 BUSCA RSS GENÉRICO
-// -----------------------------
+// --------------------------------------
+// 🔹 BUSCA EM UMA FONTE RSS
+// --------------------------------------
 async function fetchRSS(source) {
   try {
     const r = await axios.get(source.url);
     const parsed = await xml2js.parseStringPromise(r.data, { mergeAttrs: true });
+
     const items = parsed.rss?.channel?.[0]?.item || [];
+
     return items.map(it => {
       const title = it.title?.[0] || "Untitled";
+
       return {
         title,
         url: it.link?.[0] || "#",
         source: source.name,
-        publishedAt: it.pubDate ? new Date(it.pubDate[0]).toISOString() : new Date().toISOString(),
-        timestamp: it.pubDate ? new Date(it.pubDate[0]).getTime() : Date.now(),
-        impact: /(FED|CPI|inflation|interest rate)/i.test(title) ? "high" : "low",
+        publishedAt: it.pubDate
+          ? new Date(it.pubDate[0]).toISOString()
+          : new Date().toISOString(),
+        timestamp: it.pubDate
+          ? new Date(it.pubDate[0]).getTime()
+          : Date.now(),
+        impact: /(FED|CPI|inflation|interest rate)/i.test(title)
+          ? "high"
+          : "low",
         symbols: detectSymbols(title),
       };
     });
@@ -104,11 +126,12 @@ async function fetchRSS(source) {
   }
 }
 
-// -----------------------------
-// 🔹 COMBINAÇÃO DE FONTES
-// -----------------------------
+// --------------------------------------
+// 🔹 COMBINAÇÃO DE TODAS AS FONTES
+// --------------------------------------
 async function doFetch() {
   try {
+    // 1) Busca NewsAPI
     const newsapiArticles = await fetchNewsAPI();
     const formattedNewsAPI = newsapiArticles.map(a => {
       const title = a.title || "Untitled";
@@ -116,41 +139,57 @@ async function doFetch() {
         title,
         url: a.url || "#",
         source: a.source?.name || "NewsAPI",
-        publishedAt: a.publishedAt ? new Date(a.publishedAt).toISOString() : new Date().toISOString(),
-        timestamp: a.publishedAt ? new Date(a.publishedAt).getTime() : Date.now(),
-        impact: /(FED|CPI|inflation|interest rate)/i.test(title) ? "high" : "low",
+        publishedAt: a.publishedAt
+          ? new Date(a.publishedAt).toISOString()
+          : new Date().toISOString(),
+        timestamp: a.publishedAt
+          ? new Date(a.publishedAt).getTime()
+          : Date.now(),
+        impact: /(FED|CPI|inflation|interest rate)/i.test(title)
+          ? "high"
+          : "low",
         symbols: detectSymbols(title),
       };
     });
 
-    const rssResults = await Promise.all(RSS_SOURCES.map(src => fetchRSS(src).catch(() => [])));
+    // 2) Busca RSS
+    const rssResults = await Promise.all(
+      RSS_SOURCES.map(src => fetchRSS(src).catch(() => []))
+    );
     const allRSS = rssResults.flat();
 
+    // 3) Combina e ordena
     const combined = [...formattedNewsAPI, ...allRSS];
     combined.sort((a, b) => b.timestamp - a.timestamp);
 
+    // 4) Mantém só os 20 mais recentes
     latestNews = combined.slice(0, 20);
+
     return latestNews;
   } catch (e) {
-    console.error("Erro combinando notícias:", e);
+    console.error("❌ Erro combinando notícias:", e);
     return latestNews;
   }
 }
 
-// -----------------------------
-// 🔹 EXPORTS
-// -----------------------------
+// --------------------------------------
+// 🔹 EXPORTA O MÓDULO
+// --------------------------------------
 module.exports = {
   start: onUpdate => {
+    // Primeira atualização imediata
     doFetch().then(n => onUpdate(n));
+
+    // Atualiza a cada 60s
     setInterval(async () => {
       try {
         const n = await doFetch();
         onUpdate(n);
       } catch (e) {
-        console.error("Erro atualização news:", e);
+        console.error("❌ Erro atualização news:", e);
       }
     }, 60 * 1000);
   },
+
   getLatest: () => latestNews,
 };
