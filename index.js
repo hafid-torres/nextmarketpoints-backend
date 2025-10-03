@@ -1,8 +1,9 @@
-const dotenv = require('dotenv');
+// ==============================
+// index.js - Backend NextMarketPoints
+// Reescrito com melhorias e correções
+// ==============================
 
-// --------------------------
-// Ajuste para suportar DOTENV_CONFIG_PATH
-// --------------------------
+const dotenv = require('dotenv');
 const envFile = process.env.DOTENV_CONFIG_PATH || '.env.production';
 dotenv.config({ path: envFile });
 
@@ -13,10 +14,9 @@ const strategies = require('./strategies');
 const newsModule = require('./news');
 const helmet = require('helmet');
 const cors = require('cors');
-const fs = require('fs');
 
 // ==============================
-// Lista de símbolos, candles e constantes
+// Constantes e armazenamento
 // ==============================
 const SYMBOLS = [
   'GOLD','SILVER','EURUSD','GBPUSD','USDJPY','AUDUSD','USDCAD','NZDUSD','USDCHF','EURJPY',
@@ -26,12 +26,13 @@ const SYMBOLS = [
   'OILCash','NGASCash','XPTUSD','XPDUSD',
   'VIX-OCT25'
 ];
+
 const MAX_CANDLES = 500;
 const candlesBySymbol = {};
 SYMBOLS.forEach(s => candlesBySymbol[s] = []);
 
 // ==============================
-// Função calculateVolatility
+// Função de Volatilidade
 // ==============================
 const calculateVolatility = symbol => {
   const candles = candlesBySymbol[symbol] || [];
@@ -43,7 +44,7 @@ const calculateVolatility = symbol => {
 };
 
 // ==============================
-// Configuração do Express + CORS
+// Express + CORS
 // ==============================
 const allowedOrigins = [
   "http://localhost:5173",
@@ -56,20 +57,16 @@ app.use(helmet());
 app.use(cors({ origin: allowedOrigins, methods: ["GET", "POST"], credentials: true }));
 
 // ==============================
-// Middleware JSON – apenas express.json() com verificação
+// Middleware JSON
 // ==============================
 app.use(express.json({
   strict: true,
   verify: (req, res, buf) => {
-    try {
-      JSON.parse(buf.toString());
-    } catch (e) {
-      throw new Error('JSON inválido');
-    }
+    try { JSON.parse(buf.toString()); } 
+    catch (e) { throw new Error('JSON inválido'); }
   }
 }));
 
-// Middleware global para capturar JSON inválido
 app.use((err, req, res, next) => {
   if (err.message === 'JSON inválido') {
     console.error('⚠️ JSON inválido recebido (raw):', req.body);
@@ -78,22 +75,17 @@ app.use((err, req, res, next) => {
   next(err);
 });
 
+// ==============================
+// Servidor HTTP + Socket.IO
+// ==============================
 const server = http.createServer(app);
-
-// ==============================
-// Socket.IO com CORS unificado
-// ==============================
 const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true
-  },
-  transports: ["websocket", "polling"],
+  cors: { origin: allowedOrigins, methods: ["GET", "POST"], credentials: true },
+  transports: ["websocket", "polling"]
 });
 
 // ==============================
-// Configuração do servidor
+// Configurações básicas
 // ==============================
 const PORT = process.env.PORT || 3000;
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'nextmarketpoints-backend' }));
@@ -123,21 +115,20 @@ app.get('/strategies', (req, res) => {
   }
 });
 
-// Endpoint de teste de sinal
+// Endpoint de teste
 app.get('/test-signal', (req, res) => {
-  const signal = { id: Date.now(), symbol: 'GOLD', preco: 1950, direcao: 'BUY', status: 'ativo', hora: new Date().toLocaleTimeString(), resultado: null };
+  const signal = { id: Date.now(), symbol: 'GOLD', price: 1950, side: 'BUY', strategy: 'test', confidence: 50, reasons: ['Teste emitido'] };
   console.log('⚡ Emitindo sinal de teste:', signal);
   io.emit('signal', signal);
   res.json(signal);
 });
 
 // ==============================
-// Endpoint para ticks reais do EA
+// Endpoint de ticks do EA
 // ==============================
 app.post('/ea-tick', (req, res) => {
   console.log("=== Recebido POST /ea-tick ===");
-  console.log("Headers:", req.headers);
-  console.log("Body (raw):", req.body);
+  console.log("Body:", req.body);
 
   if (!req.body || (Array.isArray(req.body) && req.body.length === 0)) {
     console.warn("⚠️ JSON inválido recebido (vazio ou undefined)");
@@ -149,7 +140,7 @@ app.post('/ea-tick', (req, res) => {
 
   ticks.forEach(tick => {
     const { symbol, price } = tick;
-    let { change, timestamp } = tick;
+    let { change, timestamp, signal } = tick;
 
     if (!symbol || price === undefined) {
       console.warn('⚠️ Tick inválido, falta symbol ou price:', tick);
@@ -173,9 +164,13 @@ app.post('/ea-tick', (req, res) => {
     candlesBySymbol[symbol].push(candle);
     if (candlesBySymbol[symbol].length > MAX_CANDLES) candlesBySymbol[symbol].shift();
 
+    // Emit events compatíveis com frontend
     io.emit('candle', candle);
     io.emit('ticker', { symbol, price, change, timestamp: candle.time });
     io.emit('volatility', { symbol, level: calculateVolatility(symbol) });
+
+    // Emitir sinal do EA se disponível
+    if (signal) io.emit('signal', signal);
 
     processedTicks.push(symbol);
   });
@@ -190,14 +185,23 @@ app.post('/ea-tick', (req, res) => {
 });
 
 // ==============================
-// Socket.IO – conexão
+// Socket.IO – conexão inicial
 // ==============================
 io.on('connection', socket => {
   console.log(`📡 Cliente conectado: ${socket.id} | Total clientes: ${io.engine.clientsCount}`);
+  
+  // Envia candles iniciais no formato esperado pelo frontend
   const payload = {};
-  SYMBOLS.forEach(s => payload[s] = candlesBySymbol[s].slice(-200));
-  socket.emit('init', { candles: payload, symbols: SYMBOLS });
+  SYMBOLS.forEach(s => payload[s] = candlesBySymbol[s].slice(-200).map(c => ({
+    symbol: s,
+    price: c.close,
+    change: c.close - c.open,
+    timestamp: c.time
+  })));
+  
+  socket.emit('init', { ticker: payload, symbols: SYMBOLS });
   socket.emit('news', newsModule.getLatest());
+
   socket.on('disconnect', () => console.log(`❌ Cliente desconectado: ${socket.id}`));
 });
 
