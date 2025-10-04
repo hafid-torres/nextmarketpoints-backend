@@ -45,6 +45,11 @@ const PORT = process.env.PORT || 3000;
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'nextmarketpoints-backend' }));
 
 // ==============================
+// Variáveis globais
+// ==============================
+let lastTickAt = null;  // <- última vez que recebemos tick real
+
+// ==============================
 // Rotas HTTP
 // ==============================
 app.get('/news', (req, res) => {
@@ -113,6 +118,9 @@ app.post('/ea-tick', (req, res) => {
     io.emit('volatility', { symbol, level: calculateVolatility(symbol) });
 
     processedTicks.push(symbol);
+
+    // ✅ Atualiza timestamp do último tick real recebido
+    lastTickAt = Date.now();
   });
 
   if (processedTicks.length === 0) {
@@ -309,6 +317,25 @@ newsModule.start(news => {
 // ==============================
 setInterval(tickSimulation, 5000); // Atualiza candles e sinais a cada 5s
 setInterval(saveCandles, 5*60*1000); // Salva candles a cada 5 min
+
+// ==============================
+// Endpoint de administração
+// ==============================
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "default_token";
+
+app.get("/admin/status", (req, res) => {
+  const token = req.headers["x-admin-token"];
+  if (token !== ADMIN_TOKEN) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  res.json({
+    mode: process.env.TICK_MODE || "auto",
+    realTickTTL: process.env.REAL_TICK_TTL_MS || 60000,
+    lastTickAt,
+    uptime: process.uptime()
+  });
+});
 
 // ==============================
 // Start server
